@@ -56,7 +56,9 @@ void pidctrl_free(pidctrl_t *p);
 
 void pidctrl_set_delta_t(pidctrl_t *p, const uint32_t delta_t_ms);
 
+double pidctrl_get_set_point(pidctrl_t *p);
 void pidctrl_set_set_point(pidctrl_t *p, const double sp);
+
 void pidctrl_tune(pidctrl_t *p, const double kp, const double ki,
 		  const double kd);
 

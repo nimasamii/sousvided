@@ -108,8 +108,16 @@ void pidctrl_set_delta_t(pidctrl_t *p, const uint32_t delta_t_ms)
 	p->delta_t = delta_t_ms;
 }
 
+double pidctrl_get_set_point(pidctrl_t *p)
+{
+	assert(p != NULL);
+	return p->set_point;
+}
+
 void pidctrl_set_set_point(pidctrl_t *p, const double sp)
 {
+	assert(p != NULL);
+	assert(sp >= 0.0);
 	p->set_point = sp;
 }
 
