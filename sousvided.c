@@ -24,9 +24,19 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "bcm2835.h"
 #include "max31865.h"
 #include "motor.h"
+#include "pid.h"
 #include "rtd_table.h"
 
 #define MOTOR_CLOCK_DIVIDER BCM2835_PWM_CLOCK_DIVIDER_1024
+
+#define PID_UPDATE_FREQUENCY_MS 1000
+#define PID_MIN_DUTY_CYCLE 0.02
+#define PID_MAX_DUTY_CYCLE 1.0
+
+static double query_wrapper(void *p)
+{
+	return max31865_get_temperature((max31865_t *)p, NULL);
+}
 
 int main(int argc, char **argv)
 {
@@ -37,6 +47,7 @@ int main(int argc, char **argv)
 
 	max31865_t maxim;
 	motor_t motor;
+	pidctrl_t *pidctrl = NULL;
 
 	if (!bcm2835_init()) {
 		fprintf(stderr, "Failed to initialize bcm2835 library.\n");
@@ -55,6 +66,18 @@ int main(int argc, char **argv)
 	memset(&motor, 0, sizeof(motor));
 	motor_init(&motor, MOTOR_CLOCK_DIVIDER, 1000);
 
+	pidctrl = pidctrl_init(40.0, 0.5, 25.0, 4.0, &query_wrapper, &maxim,
+			       PID_UPDATE_FREQUENCY_MS, PID_MIN_DUTY_CYCLE,
+			       PID_MAX_DUTY_CYCLE);
+	if (!pidctrl) {
+		fprintf(stderr, "Failed to initialize PID controller.\n");
+		motor_cleanup(&motor);
+		max31865_cleanup(&maxim);
+		free_rtd_table();
+		exit(EXIT_FAILURE);
+	}
+
+	pidctrl_free(pidctrl);
 	motor_cleanup(&motor);
 	max31865_cleanup(&maxim);
 	free_rtd_table();

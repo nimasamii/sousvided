@@ -6,12 +6,13 @@ LDLIBS = -lbcm2835 -lm
 
 all: sousvided
 clean:
-	rm -rf rtd_table.o max31865.o sousvided.o motor.o
+	rm -rf rtd_table.o max31865.o sousvided.o motor.o pid.o
 	rm -rf sousvided
 
 rtd_table.o: rtd_table.c rtd_table.h
 max31865.o: max31865.c max31865.h rtd_table.h
 sousvide.o: sousvide.c max31865.h rtd_table.h motor.h
-motor.o: motor.c
+motor.o: motor.c motor.h
+pid.o: pid.c pid.h
 
-sousvided: sousvided.o rtd_table.o max31865.o motor.o
+sousvided: sousvided.o rtd_table.o max31865.o motor.o pid.o
