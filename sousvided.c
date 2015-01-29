@@ -139,6 +139,7 @@ int main(int argc, char **argv)
 
 	printf("Initializing RTD table\n");
 	if (init_rtd_table(0.0, 200.0, 0.1, 1000.0, 3600.0) == -1) {
+		bcm2835_close();
 		exit(EXIT_FAILURE);
 	}
 
@@ -157,6 +158,7 @@ int main(int argc, char **argv)
 		motor_cleanup(&motor);
 		max31865_cleanup(&maxim);
 		free_rtd_table();
+		bcm2835_close();
 		exit(EXIT_FAILURE);
 	}
 
@@ -171,6 +173,7 @@ int main(int argc, char **argv)
 		motor_cleanup(&motor);
 		max31865_cleanup(&maxim);
 		free_rtd_table();
+		bcm2835_close();
 		exit(EXIT_FAILURE);
 	}
 
@@ -179,5 +182,6 @@ int main(int argc, char **argv)
 	motor_cleanup(&motor);
 	max31865_cleanup(&maxim);
 	free_rtd_table();
+	bcm2835_close();
 	return 0;
 }
