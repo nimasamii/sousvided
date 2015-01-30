@@ -132,7 +132,7 @@ static void button_callback_handler(const uint8_t pin, void *user_data)
 	}
 }
 
-/*static*/ void *pidctrl_loop_thread(void *user_data)
+static void *pidctrl_loop_thread(void *user_data)
 {
 	struct callback_data *data = (struct callback_data *)user_data;
 	struct timespec sleep_interval = { 0, 1E9 / PID_CONTROL_LOOP_HZ };
@@ -148,12 +148,12 @@ static void button_callback_handler(const uint8_t pin, void *user_data)
 	return NULL;
 }
 
-/*static*/ uint32_t nearest_multiple(const double value, const uint32_t multiple)
+static uint32_t nearest_multiple(const double value, const uint32_t multiple)
 {
 	return (ceil(value / multiple) * multiple);
 }
 
-/*static*/ void *heater_control_thread(void *user_data)
+static void *heater_control_thread(void *user_data)
 {
 	struct callback_data *data = (struct callback_data *)user_data;
 	uint32_t on_ms, off_ms;
@@ -209,7 +209,23 @@ static void button_callback_handler(const uint8_t pin, void *user_data)
 			total_on = 0;
 		}
 	}
+
+	/* make sure SSR is off after the thread finishes */
+	bcm2835_gpio_write(SSR_PIN, LOW);
+
 	return NULL;
+}
+
+static void configure_SSR_output()
+{
+	bcm2835_gpio_fsel(SSR_PIN, BCM2835_GPIO_FSEL_OUTP);
+	bcm2835_gpio_write(SSR_PIN, LOW);
+}
+
+static void cleanup_SSR_output()
+{
+	bcm2835_gpio_write(SSR_PIN, LOW);
+	bcm2835_gpio_fsel(SSR_PIN, BCM2835_GPIO_FSEL_INPT);
 }
 
 int main(int argc, char **argv)
@@ -219,59 +235,89 @@ int main(int argc, char **argv)
 	 *       from config file (libconfig?)
 	 ***********************************************************************/
 
+	int status = 0;
 	struct callback_data data;
 	memset(&data, 0, sizeof(data));
 
 	if (!bcm2835_init()) {
 		fprintf(stderr, "Failed to initialize bcm2835 library.\n");
-		exit(EXIT_FAILURE);
+		goto out;
 	}
+	++status;
 
 	printf("Initializing RTD table\n");
 	if (init_rtd_table(0.0, 200.0, 0.1, 1000.0, 3600.0) == -1) {
-		bcm2835_close();
-		exit(EXIT_FAILURE);
+		goto out;
 	}
+	++status;
 
 	max31865_init(&data.maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
 		      MAX31865_4WIRE_RTD);
-
 	motor_init(&data.motor, MOTOR_CLOCK_DIVIDER, MOTOR_PWM_RANGE);
+	++status;
 
 	data.pidctrl = pidctrl_init(
 	    40.0, 0.5, 25.0, 4.0, &query_wrapper, (void *)&data.maxim,
 	    PID_CONTROL_LOOP_MS, PID_MIN_DUTY_CYCLE, PID_MAX_DUTY_CYCLE);
 	if (!data.pidctrl) {
 		fprintf(stderr, "Failed to initialize PID controller.\n");
-		motor_cleanup(&data.motor);
-		max31865_cleanup(&data.maxim);
-		free_rtd_table();
-		bcm2835_close();
-		exit(EXIT_FAILURE);
+		goto out;
 	}
+	++status;
 
 	data.buttons =
 	    buttons_init(BUTTON_1_PIN, BUTTON_2_PIN, BUTTON_3_PIN, BUTTON_4_PIN,
 			 50, &button_callback_handler, (void *)&data);
 	if (!data.buttons) {
 		fprintf(stderr, "Failed to initialize button handler.\n");
+		goto out;
+	}
+	configure_SSR_output();
+	++status;
+
+	if (pthread_create(&data.ctrl_loop_id, NULL,
+			   &pidctrl_loop_thread, (void *)&data) == -1) {
+		fprintf(stderr, "Failed to create PID control loop thread\n");
+		goto out;
+	}
+	++status;
+
+	/* wait for the PID loop to run a couple of cycles */
+	sleep(1);
+
+	if (pthread_create(&data.heater_ctrl_id, NULL,
+			   &heater_control_thread, (void *)&data) == -1) {
+		fprintf(stderr, "Failed to create heater control thread\n");
+		data.stop_control_loop = 1;
+		pthread_join(data.ctrl_loop_id, NULL);
+		goto out;
+	}
+	++status;
+
+out:
+	switch (status) {
+	case 7:
+		data.stop_control_loop = 1;
+		pthread_join(data.ctrl_loop_id, NULL);
+	case 6:
+		data.stop_control_loop = 1;
+		pthread_join(data.heater_ctrl_id, NULL);
+	case 5:
+		cleanup_SSR_output();
+		buttons_cleanup(data.buttons);
+	case 4:
 		pidctrl_free(data.pidctrl);
+	case 3:
 		motor_cleanup(&data.motor);
 		max31865_cleanup(&data.maxim);
+	case 2:
 		free_rtd_table();
+	case 1:
 		bcm2835_close();
-		exit(EXIT_FAILURE);
 	}
 
-	/****************************************************
-	 * TODO: start PID and heater control loop threads
-	 ****************************************************/
-
-	buttons_cleanup(data.buttons);
-	pidctrl_free(data.pidctrl);
-	motor_cleanup(&data.motor);
-	max31865_cleanup(&data.maxim);
-	free_rtd_table();
-	bcm2835_close();
+	if (status != 7) {
+		exit(EXIT_FAILURE);
+	}
 	return 0;
 }
