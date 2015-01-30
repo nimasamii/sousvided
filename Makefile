@@ -6,8 +6,7 @@ LDLIBS = -lbcm2835 -lm -lpthread
 
 all: sousvided
 clean:
-	rm -rf rtd_table.o max31865.o sousvided.o motor.o pid.o buttons.o
-	rm -rf sousvided
+	rm -rf *.o sousvided
 
 buttons.o: buttons.c buttons.h
 max31865.o: max31865.c max31865.h rtd_table.h

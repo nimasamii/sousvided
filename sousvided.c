@@ -18,9 +18,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
 #include <assert.h>
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <pthread.h>
+#include <unistd.h>
 
 #include "bcm2835.h"
 #include "buttons.h"
@@ -35,27 +40,36 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define MOTOR_PWM_RANGE 1000
 #define MOTOR_SPEED_DELTA 50
 
-#define PID_UPDATE_FREQUENCY_MS 1000
 #define PID_MIN_DUTY_CYCLE 0.02
 #define PID_MAX_DUTY_CYCLE 1.0
 #define PID_MIN_SET_POINT 20.0
 #define PID_MAX_SET_POINT 95.0
 #define PID_SET_POINT_DELTA 0.5
+#define PID_CONTROL_LOOP_HZ 5
+#define PID_CONTROL_LOOP_MS (1000 / PID_CONTROL_LOOP_HZ)
 
 #define BUTTON_1_PIN RPI_V2_GPIO_P1_13
 #define BUTTON_2_PIN RPI_V2_GPIO_P1_15
 #define BUTTON_3_PIN RPI_V2_GPIO_P1_16
 #define BUTTON_4_PIN RPI_V2_GPIO_P1_18
 
+#define SSR_PIN RPI_V2_GPIO_P1_07
+
+struct callback_data {
+	max31865_t maxim;
+	motor_t motor;
+	pidctrl_t *pidctrl;
+	buttons_t *buttons;
+	pthread_t ctrl_loop_id;
+	pthread_t heater_ctrl_id;
+	volatile int stop_control_loop;
+	volatile double heater_duty_cycle;
+};
+
 static double query_wrapper(void *p)
 {
 	return max31865_get_temperature((max31865_t *)p, NULL);
 }
-
-struct buttons_callback_data {
-	pidctrl_t *pidctrl;
-	motor_t *motor;
-};
 
 static void change_motor_speed(motor_t *motor, int32_t delta)
 {
@@ -94,8 +108,7 @@ static void update_target_temperature(pidctrl_t *pidctrl, double delta)
 
 static void button_callback_handler(const uint8_t pin, void *user_data)
 {
-	struct buttons_callback_data *data =
-	    (struct buttons_callback_data *)user_data;
+	struct callback_data *data = (struct callback_data *)user_data;
 
 	switch (pin) {
 	case BUTTON_1_PIN:
@@ -107,16 +120,96 @@ static void button_callback_handler(const uint8_t pin, void *user_data)
 		update_target_temperature(data->pidctrl, -PID_SET_POINT_DELTA);
 		break;
 	case BUTTON_3_PIN:
-		change_motor_speed(data->motor, MOTOR_SPEED_DELTA);
+		change_motor_speed(&data->motor, MOTOR_SPEED_DELTA);
 		break;
 	case BUTTON_4_PIN:
-		change_motor_speed(data->motor, -MOTOR_SPEED_DELTA);
+		change_motor_speed(&data->motor, -MOTOR_SPEED_DELTA);
 		break;
 		break;
 	default:
 		/* invalid button pin ID */
 		assert(0);
 	}
+}
+
+/*static*/ void *pidctrl_loop_thread(void *user_data)
+{
+	struct callback_data *data = (struct callback_data *)user_data;
+	struct timespec sleep_interval = { 0, 1E9 / PID_CONTROL_LOOP_HZ };
+	struct timespec remaining_interval;
+
+	while (data->stop_control_loop) {
+		data->heater_duty_cycle = pidctrl_get_output(data->pidctrl);
+		if (nanosleep(&sleep_interval, &remaining_interval) == -1 &&
+		    errno == EINTR) {
+			nanosleep(&remaining_interval, NULL);
+		}
+	}
+	return NULL;
+}
+
+/*static*/ uint32_t nearest_multiple(const double value, const uint32_t multiple)
+{
+	return (ceil(value / multiple) * multiple);
+}
+
+/*static*/ void *heater_control_thread(void *user_data)
+{
+	struct callback_data *data = (struct callback_data *)user_data;
+	uint32_t on_ms, off_ms;
+	struct timespec start, end;
+	int n = 0;
+	uint32_t total_on = 0;
+
+	while (!data->stop_control_loop) {
+		if (data->heater_duty_cycle >= 10.0) {
+			on_ms =
+			    nearest_multiple(200 * data->heater_duty_cycle, 20);
+			off_ms = 200 - on_ms;
+		} else {
+			on_ms = 0;
+			off_ms = 200;
+		}
+
+		total_on += on_ms;
+		if (on_ms) {
+			clock_gettime(CLOCK_MONOTONIC, &start);
+			bcm2835_gpio_write(SSR_PIN, HIGH);
+			clock_gettime(CLOCK_MONOTONIC, &end);
+
+			on_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
+				 (end.tv_nsec - start.tv_nsec) / 1E6;
+			end.tv_sec = on_ms / 1000;
+			end.tv_nsec = (on_ms % 1000) * 1E6;
+
+			if (nanosleep(&end, &start) == -1 && errno == EINTR) {
+				nanosleep(&start, NULL);
+			}
+		}
+
+		if (off_ms) {
+			clock_gettime(CLOCK_MONOTONIC, &start);
+			bcm2835_gpio_write(SSR_PIN, LOW);
+			clock_gettime(CLOCK_MONOTONIC, &end);
+
+			off_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
+				  (end.tv_nsec - start.tv_nsec) / 1E6;
+			end.tv_sec = on_ms / 1000;
+			end.tv_nsec = (on_ms % 1000) * 1E6;
+
+			if (nanosleep(&end, &start) == -1 && errno == EINTR) {
+				nanosleep(&start, NULL);
+			}
+		}
+
+		if (++n % 5 == 0) {
+			printf("Heater was on for %u ms (%f %%)\n",
+				total_on, (total_on / 1000.0));
+			n = 0;
+			total_on = 0;
+		}
+	}
+	return NULL;
 }
 
 int main(int argc, char **argv)
@@ -126,11 +219,8 @@ int main(int argc, char **argv)
 	 *       from config file (libconfig?)
 	 ***********************************************************************/
 
-	max31865_t maxim;
-	motor_t motor;
-	pidctrl_t *pidctrl = NULL;
-	buttons_t *btns = NULL;
-	struct buttons_callback_data btn_cb_data = { NULL, NULL };
+	struct callback_data data;
+	memset(&data, 0, sizeof(data));
 
 	if (!bcm2835_init()) {
 		fprintf(stderr, "Failed to initialize bcm2835 library.\n");
@@ -143,44 +233,44 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	memset(&maxim, 0, sizeof(maxim));
-	max31865_init(&maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
+	max31865_init(&data.maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
 		      MAX31865_4WIRE_RTD);
 
-	memset(&motor, 0, sizeof(motor));
-	motor_init(&motor, MOTOR_CLOCK_DIVIDER, MOTOR_PWM_RANGE);
+	motor_init(&data.motor, MOTOR_CLOCK_DIVIDER, MOTOR_PWM_RANGE);
 
-	pidctrl = pidctrl_init(40.0, 0.5, 25.0, 4.0, &query_wrapper, &maxim,
-			       PID_UPDATE_FREQUENCY_MS, PID_MIN_DUTY_CYCLE,
-			       PID_MAX_DUTY_CYCLE);
-	if (!pidctrl) {
+	data.pidctrl = pidctrl_init(
+	    40.0, 0.5, 25.0, 4.0, &query_wrapper, (void *)&data.maxim,
+	    PID_CONTROL_LOOP_MS, PID_MIN_DUTY_CYCLE, PID_MAX_DUTY_CYCLE);
+	if (!data.pidctrl) {
 		fprintf(stderr, "Failed to initialize PID controller.\n");
-		motor_cleanup(&motor);
-		max31865_cleanup(&maxim);
+		motor_cleanup(&data.motor);
+		max31865_cleanup(&data.maxim);
 		free_rtd_table();
 		bcm2835_close();
 		exit(EXIT_FAILURE);
 	}
 
-	btn_cb_data.pidctrl = pidctrl;
-	btn_cb_data.motor = &motor;
-	btns =
+	data.buttons =
 	    buttons_init(BUTTON_1_PIN, BUTTON_2_PIN, BUTTON_3_PIN, BUTTON_4_PIN,
-			 50, &button_callback_handler, (void *)&btn_cb_data);
-	if (!btns) {
+			 50, &button_callback_handler, (void *)&data);
+	if (!data.buttons) {
 		fprintf(stderr, "Failed to initialize button handler.\n");
-		pidctrl_free(pidctrl);
-		motor_cleanup(&motor);
-		max31865_cleanup(&maxim);
+		pidctrl_free(data.pidctrl);
+		motor_cleanup(&data.motor);
+		max31865_cleanup(&data.maxim);
 		free_rtd_table();
 		bcm2835_close();
 		exit(EXIT_FAILURE);
 	}
 
-	buttons_cleanup(btns);
-	pidctrl_free(pidctrl);
-	motor_cleanup(&motor);
-	max31865_cleanup(&maxim);
+	/****************************************************
+	 * TODO: start PID and heater control loop threads
+	 ****************************************************/
+
+	buttons_cleanup(data.buttons);
+	pidctrl_free(data.pidctrl);
+	motor_cleanup(&data.motor);
+	max31865_cleanup(&data.maxim);
 	free_rtd_table();
 	bcm2835_close();
 	return 0;
