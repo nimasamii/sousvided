@@ -23,11 +23,20 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdio.h>
 #include <stdlib.h>
 
-static const double A = 3.9083E-3;
-static const double B = -5.775 - 7;
-static const double C = -4.18301E-12;
-
 float *RTD_TABLE = NULL;
+
+static double callendar_van_dusen(const double T)
+{
+	static const double A = 3.9083E-3;
+	static const double B = -5.775 - 7;
+	static const double C = -4.18301E-12;
+
+	double resistance = 1.0 + (A * T) + (B * pow(T, 2));
+	if (T < 0.0) {
+		resistance += C * (T - 100.0) * pow(T, 3);
+	}
+	return resistance;
+}
 
 static double *make_resistances(const double T0, const double Tmax,
 				const double dT, const double R0,
@@ -50,13 +59,8 @@ static double *make_resistances(const double T0, const double Tmax,
 		return NULL;
 	}
 
-	for (; T < 0.0 && T < (Tmax + dT); ++i, T += dT) {
-		resistances[i] = R0 * (1.0 * (A * T) + (B * pow(T, 2)) +
-				       (C * (T - 100.0) * pow(T, 3)));
-	}
-
-	for (; T < (Tmax + dT); ++i, T += dT) {
-		resistances[i] = R0 * (1.0 + (A * T) + (B * pow(T, 2)));
+	for (T = T0; T < (Tmax + dT); T += dT) {
+		resistances[i++] = callendar_van_dusen(T);
 	}
 	*num_resistances = i;
 
