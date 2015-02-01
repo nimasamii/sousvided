@@ -2,7 +2,7 @@ BUILD_ARCH := $(shell uname -m)
 
 CFLAGS = -g -Wall -Werror -I/home/nima/src/bcm2835-1.38/src -pthread
 LDFLAGS = -L/home/nima/src/bcm2835-1.38/src
-LDLIBS = -lbcm2835 -lm -lpthread
+LDLIBS = -lbcm2835 -lm -lrt -lpthread
 
 # Add CFLAGS to optimize build when compiling on RaspberryPi
 ifeq ($(BUILD_ARCH),armv6l)
