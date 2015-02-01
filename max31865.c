@@ -121,6 +121,8 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 	m->cs_pin = cs_pin;
 	m->drdy_pin = drdy_pin;
 	m->rtd_type = rtd_type;
+	m->last_query.tv_sec = 0;
+	m->last_query.tv_nsec = 0;
 
 	/* initialize GPIO pins for SPI operations */
 	bcm2835_spi_begin();
@@ -267,14 +269,23 @@ int max31865_set_configuration(max31865_t *m, const int vbias,
 	return 0;
 }
 
+static uint32_t delta_t_ms(const struct timespec *start, const struct timespec *end)
+{
+	assert(start != NULL);
+	assert(end != NULL);
+
+	return ((end->tv_sec - start->tv_sec) * 1000 +
+		(end->tv_nsec - start->tv_nsec) * 1000000);
+}
+
 uint16_t max31865_read_rtd(max31865_t *m, uint8_t *fault)
 {
 	assert(m != NULL);
 	assert(m->initialized);
 
-	/* check if DRDY signaled new temperature readout */
+	/* check if DRDY signaled new temperature readout
+	 * falling edge detect is currently not working
 	if (bcm2835_gpio_eds(m->drdy_pin)) {
-		/* readout new resistance value and clear EDS flag */
 		m->rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
 		if (fault) {
 			*fault = m->rtd & 0x0001;
@@ -282,8 +293,26 @@ uint16_t max31865_read_rtd(max31865_t *m, uint8_t *fault)
 		m->rtd >>= 1;
 
 		bcm2835_gpio_set_eds(m->drdy_pin);
+	}*/
+
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (delta_t_ms(&m->last_query, &now) >= 15) {
+		/* The MAX31865 takes about 15ms per conversion,
+		 * so we need to only query the chip if a new
+		 * measurement is available
+		 */
+		uint16_t rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
+		if (fault) {
+			*fault = rtd & 0x0001;
+		}
+		m->rtd = (rtd >> 1) & 0x7FFF;
+		m->last_query = now;
+	} else if (fault) {
+		*fault = 0;
 	}
-	return (m->rtd & 0x7FFF);
+
+	return m->rtd;
 }
 
 float max31865_get_temperature(max31865_t *m, uint8_t *fault)

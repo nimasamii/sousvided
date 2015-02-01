@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define SOUSVIDED_MAX31865
 
 #include <stdint.h>
+#include <time.h>
 
 enum MAX31865_REGISTER {
 	MAX31865_REGISTER_CONFIG = 0x00,
@@ -63,6 +64,7 @@ struct max31865
 	uint8_t drdy_pin;
 	uint8_t rtd_type;
 	uint8_t initialized;
+	struct timespec last_query;
 };
 typedef struct max31865 max31865_t;
 
