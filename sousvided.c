@@ -135,15 +135,11 @@ static void button_callback_handler(const uint8_t pin, void *user_data)
 static void *pidctrl_loop_thread(void *user_data)
 {
 	struct callback_data *data = (struct callback_data *)user_data;
-	struct timespec sleep_interval = { 0, 1E9 / PID_CONTROL_LOOP_HZ };
-	struct timespec remaining_interval;
+	const useconds_t num_usecs = 1000 * PID_CONTROL_LOOP_MS;
 
-	while (data->stop_control_loop) {
+	while (!data->stop_control_loop) {
 		data->heater_duty_cycle = pidctrl_get_output(data->pidctrl);
-		if (nanosleep(&sleep_interval, &remaining_interval) == -1 &&
-		    errno == EINTR) {
-			nanosleep(&remaining_interval, NULL);
-		}
+		usleep(num_usecs);
 	}
 	return NULL;
 }
