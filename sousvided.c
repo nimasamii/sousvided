@@ -154,54 +154,63 @@ static void *heater_control_thread(void *user_data)
 	struct callback_data *data = (struct callback_data *)user_data;
 	uint32_t on_ms, off_ms;
 	struct timespec start, end;
-	int n = 0;
+	uint32_t n = 0;
 	uint32_t total_on = 0;
+	uint8_t ssr_state = 0;
 
 	while (!data->stop_control_loop) {
-		if (data->heater_duty_cycle >= 10.0) {
-			on_ms =
-			    nearest_multiple(200 * data->heater_duty_cycle, 20);
-			off_ms = 200 - on_ms;
+		/* The SSR has a built-in triac, so it will only switch on
+		 * zero crossings. Make sure we do not switch the SSR on for
+		 * time intervals smaller than a half-period (10ms @ 50Hz,
+		 * 8ms @ 60Hz).
+		 */
+		if (data->heater_duty_cycle >= (10.0 / PID_CONTROL_LOOP_MS)) {
+			on_ms = nearest_multiple(
+			    PID_CONTROL_LOOP_MS * data->heater_duty_cycle, 10);
+			if (on_ms > PID_CONTROL_LOOP_MS) {
+				on_ms = PID_CONTROL_LOOP_MS;
+			}
+			off_ms = PID_CONTROL_LOOP_MS - on_ms;
 		} else {
 			on_ms = 0;
-			off_ms = 200;
+			off_ms = PID_CONTROL_LOOP_MS;
 		}
 
 		total_on += on_ms;
 		if (on_ms) {
-			clock_gettime(CLOCK_MONOTONIC, &start);
-			bcm2835_gpio_write(SSR_PIN, HIGH);
-			clock_gettime(CLOCK_MONOTONIC, &end);
+			/* No need to write to GPIO if SSR is already on */
+			if (!ssr_state) {
+				clock_gettime(CLOCK_MONOTONIC, &start);
+				bcm2835_gpio_write(SSR_PIN, HIGH);
+				ssr_state = 1;
+				clock_gettime(CLOCK_MONOTONIC, &end);
 
-			on_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
-				 (end.tv_nsec - start.tv_nsec) / 1E6;
-			end.tv_sec = on_ms / 1000;
-			end.tv_nsec = (on_ms % 1000) * 1E6;
-
-			if (nanosleep(&end, &start) == -1 && errno == EINTR) {
-				nanosleep(&start, NULL);
+				on_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
+					 (end.tv_nsec - start.tv_nsec) / 1E6;
 			}
+
+			usleep(1000 * on_ms);
 		}
 
 		if (off_ms) {
-			clock_gettime(CLOCK_MONOTONIC, &start);
-			bcm2835_gpio_write(SSR_PIN, LOW);
-			clock_gettime(CLOCK_MONOTONIC, &end);
+			/* No need to write to GPIO if SSR is already off */
+			if (ssr_state) {
+				clock_gettime(CLOCK_MONOTONIC, &start);
+				bcm2835_gpio_write(SSR_PIN, LOW);
+				ssr_state = 0;
+				clock_gettime(CLOCK_MONOTONIC, &end);
 
-			off_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
-				  (end.tv_nsec - start.tv_nsec) / 1E6;
-			end.tv_sec = on_ms / 1000;
-			end.tv_nsec = (on_ms % 1000) * 1E6;
-
-			if (nanosleep(&end, &start) == -1 && errno == EINTR) {
-				nanosleep(&start, NULL);
+				off_ms -= (end.tv_sec - start.tv_sec) * 1E3 +
+					  (end.tv_nsec - start.tv_nsec) / 1E6;
 			}
+
+			usleep(1000 * off_ms);
 		}
 
-		if (++n % 5 == 0) {
-			printf("Heater was on for %u ms (%f %%)\n",
-				total_on, (total_on / 1000.0));
-			n = 0;
+		if (++n % PID_CONTROL_LOOP_HZ == 0) {
+			printf("Heater was on for %u ms (%f %%), T = %f \xB0""C\n",
+			       total_on, (total_on / 10.0),
+			       max31865_get_temperature(&data->maxim, NULL));
 			total_on = 0;
 		}
 	}
