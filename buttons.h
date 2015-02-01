@@ -40,19 +40,18 @@ void button_cleanup(button_t *btn);
 
 struct buttons
 {
+	volatile uint8_t stop_thread;
+	uint8_t initialized;
+	uint32_t debounce;
+
 	button_t incr_temperature;
 	button_t decr_temperature;
-
 	button_t incr_motor_speed;
 	button_t decr_motor_speed;
 
 	button_callback_fn callback;
 	void *user_data;
 
-	uint32_t debounce;
-
-	uint8_t initialized;
-	volatile uint8_t stop_thread;
 	pthread_t thread_id;
 };
 

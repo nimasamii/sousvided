@@ -87,7 +87,7 @@ static void *button_ctrl_thread(void *user_data)
 	struct timespec now;
 	uint64_t milli_secs;
 
-	while (!btns->stop_thread) {
+	while (1) {
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		milli_secs = (now.tv_sec * 1000) + (now.tv_nsec / 1000000);
 
@@ -115,6 +115,10 @@ static void *button_ctrl_thread(void *user_data)
 				       btns->user_data);
 		}
 
+		if (btns->stop_thread) {
+			break;
+		}
+
 		usleep(50000);
 	}
 
@@ -130,20 +134,15 @@ buttons_t *buttons_init(const uint8_t inc_temp_pin, const uint8_t dec_temp_pin,
 
 	buttons_t *btns = (buttons_t *)malloc(sizeof(buttons_t));
 	if (btns) {
-		memset(&btns->incr_temperature, 0, sizeof(button_t));
-		button_init(&btns->incr_temperature, inc_temp_pin);
-
-		memset(&btns->decr_temperature, 0, sizeof(button_t));
-		button_init(&btns->decr_temperature, dec_temp_pin);
-
-		memset(&btns->incr_motor_speed, 0, sizeof(button_t));
-		button_init(&btns->incr_motor_speed, inc_motor_pin);
-
-		memset(&btns->decr_motor_speed, 0, sizeof(button_t));
-		button_init(&btns->decr_motor_speed, dec_motor_pin);
+		memset(btns, 0, sizeof(buttons_t));
 
 		btns->debounce = debounce;
-		btns->stop_thread = 0;
+		button_init(&btns->incr_temperature, inc_temp_pin);
+		button_init(&btns->decr_temperature, dec_temp_pin);
+		button_init(&btns->incr_motor_speed, inc_motor_pin);
+		button_init(&btns->decr_motor_speed, dec_motor_pin);
+
+		btns->initialized = 1;
 
 		if (pthread_create(&btns->thread_id,
 				   NULL, &button_ctrl_thread,
@@ -165,7 +164,7 @@ void buttons_cleanup(buttons_t *btns)
 	assert(btns->initialized);
 
 	/* stop the button control thread */
-	btns->stop_thread = 0;
+	btns->stop_thread = 1;
 	pthread_join(btns->thread_id, NULL);
 
 	/* cleanup all button settings */
