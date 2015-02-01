@@ -258,7 +258,11 @@ int main(int argc, char **argv)
 
 	max31865_init(&data.maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
 		      MAX31865_4WIRE_RTD);
+
 	motor_init(&data.motor, MOTOR_CLOCK_DIVIDER, MOTOR_PWM_RANGE);
+	motor_start(&data.motor);
+	motor_set_duty_cycle(&data.motor, MOTOR_PWM_RANGE / 2);
+
 	++status;
 
 	data.pidctrl = pidctrl_init(

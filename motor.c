@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "bcm2835.h"
 
-#define MOTOR_PWM_PIN RPI_GPIO_P1_12
+#define MOTOR_PWM_PIN RPI_V2_GPIO_P1_12
 #define MOTOR_PWM_CHANNEL 0
 #define MOTOR_MARKSPACE_MODE 1
 
@@ -89,28 +89,33 @@ void motor_set_duty_cycle(motor_t *m, const uint32_t duty_cycle)
 	} else {
 		m->duty_cycle = duty_cycle;
 	}
-	bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+
+	if (m->status == MOTOR_STATUS_ON) {
+		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+	}
 }
 
 void motor_set_duty_cycle_range(motor_t *m, const uint32_t duty_cycle_range)
 {
 	assert(m != NULL);
 	assert(m->initialized);
+	assert(duty_cycle_range > 10);
 
 	const float percentage = motor_get_duty_cycle_percentage(m);
-	const uint32_t duty_cycle = percentage * duty_cycle_range;
+	m->duty_cycle = percentage * duty_cycle_range;
+	m->duty_cycle_range = duty_cycle_range;
 
-	if (m->duty_cycle > duty_cycle_range) {
+	if (m->status == MOTOR_STATUS_OFF) {
+		m->duty_cycle_changed = 1;
+	} else if (m->duty_cycle > duty_cycle_range) {
 		/* update duty cycle first, then set new range */
-		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, duty_cycle);
-		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, duty_cycle_range);
+		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
 	} else {
 		/* set new range first, then update duty cycle */
-		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, duty_cycle_range);
-		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, duty_cycle);
+		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
+		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
 	}
-	m->duty_cycle = duty_cycle;
-	m->duty_cycle_range = duty_cycle_range;
 }
 
 uint32_t motor_get_duty_cycle(const motor_t *m)
@@ -154,6 +159,13 @@ void motor_start(motor_t *m)
 		bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
 				     MOTOR_STATUS_ON);
 		m->status = MOTOR_STATUS_ON;
+
+		if (m->duty_cycle_changed) {
+			bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL,
+					      m->duty_cycle_range);
+			m->duty_cycle_changed = 0;
+		}
+		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
 	}
 }
 
