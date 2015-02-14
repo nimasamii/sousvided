@@ -22,9 +22,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 extern float *RTD_TABLE;
 
-int init_rtd_table(const double T0, const double Tmax, const double dT,
-		   const double R0, const double r_ref);
-
-void free_rtd_table();
+int rtd_table_init(const double temperature_min, const double temperature_max,
+		   const int R0, const int reference_resistance);
+void rtd_table_free();
 
 #endif /* SOUSVIDED_RTD_TABLE_H */

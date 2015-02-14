@@ -25,173 +25,101 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 float *RTD_TABLE = NULL;
 
+static const double CVD_A = 3.9083E-3;
+static const double CVD_B = -5.775 - 7;
+static const double CVD_C = -4.18301E-12;
+
+/* Calculate the normalized resistance at temperature T (in degrees celsius)
+ * using the Callendar Van Dusen Equation */
 static double callendar_van_dusen(const double T)
 {
-	static const double A = 3.9083E-3;
-	static const double B = -5.775 - 7;
-	static const double C = -4.18301E-12;
-
-	double resistance = 1.0 + (A * T) + (B * pow(T, 2));
+	double resistance = 1.0 + (CVD_A * T) + (CVD_B * pow(T, 2));
 	if (T < 0.0) {
-		resistance += C * (T - 100.0) * pow(T, 3);
+		resistance += CVD_C * (T - 100.0) * pow(T, 3);
 	}
 	return resistance;
 }
 
-static double *make_resistances(const double T0, const double Tmax,
-				const double dT, const double R0,
-				size_t *num_resistances)
+/* Calculate the differential of the normalized resistance at temperature T (in
+ * degrees celsius), using the Callendar Van Dusen Equation */
+static double callendar_van_dusen_derivative(const double T)
 {
-	assert(T0 < Tmax);
-	assert(dT > 0.0 && dT < Tmax - T0);
-	assert(R0 > 0.0);
-	assert(num_resistances != NULL);
+	double diff = CVD_A + 2.0 * CVD_B * T;
+	if (T < 0.0) {
+		diff += CVD_C * (4.0 * pow(T, 3) - 300.0 * pow(T, 2));
+	}
+	return diff;
+}
 
-	double *resistances = NULL;
-	size_t i = 0;
-	double T = T0;
+/* approximate the temperature for a given resistance using Newton's method */
+double newton_approx(const double R, const int R0, const double max_residual)
+{
+	double T = 0.0;
+	double residual;
+	do {
+		residual = R - R0 * callendar_van_dusen(T);
+		T += residual / (R0 * callendar_van_dusen_derivative(T));
+	} while (fabs(residual) > max_residual);
+	return T;
+}
 
-	*num_resistances = ((Tmax + dT) - T0) / dT + 2;
-	resistances = (double *)malloc(*num_resistances * sizeof(double));
-	if (!resistances) {
-		fprintf(stderr,
-			"make_resistances: failed to allocate buffer\n");
+static double resistance_from_adc(const int adc, const int reference_resistance)
+{
+	assert(adc < 32768);
+	return ((adc * reference_resistance) / 32768.0);
+}
+
+static float *generate_rtd_table(const double temperature_min,
+				 const double temperature_max, const int R0,
+				 const int reference_resistance)
+{
+	if (R0 < 100) {
+		fprintf(stderr, "generate_rtd_table: R0 too small (%d < 100)\n",
+			R0);
 		return NULL;
 	}
 
-	for (T = T0; T < (Tmax + dT); T += dT) {
-		resistances[i++] = callendar_van_dusen(T);
-	}
-	*num_resistances = i;
-
-	return resistances;
-}
-
-static size_t find_nearest_index(const double *resistances, const size_t n,
-				 const double r, const size_t start_index)
-{
-	assert(resistances);
-	assert(n > 0);
-	size_t i = start_index;
-
-	if (r <= resistances[0]) {
-		return resistances[0];
-	} else if (r >= resistances[n - 1]) {
-		return resistances[n - 1];
-	}
-
-	if (i < 1) {
-		i = 1;
-	}
-
-	while (i < n && r >= resistances[i]) {
-		++i;
-	}
-
-	assert(i < n);
-	return i;
-}
-
-static double temperature_from_index(const size_t index, const double T0,
-				     const double dT)
-{
-	return (T0 + index * dT);
-}
-
-static double adc_to_resistance(const uint16_t adc, const double r_ref)
-{
-	assert(adc < 32768);
-	return ((adc * r_ref) / 32768.0);
-}
-
-static double interpolate_temperature(const double *resistances, const double r,
-				      const double T0, const double dT,
-				      const size_t index)
-{
-	assert(resistances);
-	const double R1 = resistances[index - 1];
-	const double T1 = temperature_from_index(index - 1, T0, dT);
-	const double slope = dT / (resistances[index] - resistances[index - 1]);
-
-	return (T1 + slope * (r - R1));
-}
-
-static float *generate_rtd_table(const double T0, const double Tmax,
-				 const double dT, const double R0,
-				 const double r_ref)
-{
-	size_t num_resistances = 0;
-	double *resistances = NULL;
-	float *rtd_table = NULL;
-	uint16_t i = 0;
-	size_t last_index = 0;
-
-	if (R0 < 100.0) {
-		fprintf(stderr, "generate_rtd_table: R0 too small (%f < 100)\n",
-			R0);
-		goto out;
-	} else if (r_ref < R0) {
-		fprintf(stderr, "generate_rtd_table: reference resistance "
-				"smaller than R0 (%f < %f)\n",
-			r_ref, R0);
-		goto out;
-	}
-
-	if (T0 >= Tmax) {
+	if (temperature_min >= temperature_max) {
 		fprintf(stderr, "generate_rtd_table: invalid temperature "
 				"boundaries (%f > %f)\n",
-			T0, Tmax);
-		goto out;
-	} else if (dT >= ((Tmax - T0) / 10.0)) {
-		fprintf(stderr,
-			"generate_rtd_table: delta T too large (%f > %f)\n", dT,
-			((Tmax - T0) / 10.0));
-		goto out;
+			temperature_min, temperature_max);
+		return NULL;
 	}
 
-	resistances = make_resistances(T0, Tmax, dT, R0, &num_resistances);
-	if (!resistances) {
-		fprintf(stderr,
-			"generate_rtd_table: failed to generate resistances\n");
-		goto out;
-	}
-
-	rtd_table = (float *)malloc(32768 * sizeof(float));
+	float *rtd_table = (float *)malloc(sizeof(float) * 32768);
 	if (!rtd_table) {
 		fprintf(stderr,
 			"generate_rtd_table: failed to allocate table.\n");
-		free(resistances);
-		goto out;
+		return NULL;
 	}
 
-	for (i = 0; i < 32768; ++i) {
-		const double r = adc_to_resistance(i, r_ref);
-		if (r <= resistances[0]) {
-			rtd_table[i] = T0;
-			continue;
-		} else if (r >= resistances[num_resistances - 1]) {
-			rtd_table[i] = Tmax;
-			continue;
+	const double resistance_min =
+	    newton_approx(callendar_van_dusen(temperature_min), R0, 1.0e-6);
+	const double resistance_max =
+	    newton_approx(callendar_van_dusen(temperature_max), R0, 1.0e-6);
+
+	double resistance;
+	int adc;
+	for (adc = 0; adc < 32768; ++adc) {
+		resistance = resistance_from_adc(adc, reference_resistance);
+		if (resistance < resistance_min) {
+			rtd_table[adc] = temperature_min;
+		} else if (resistance > resistance_max) {
+			rtd_table[adc] = temperature_max;
+		} else {
+			rtd_table[adc] = newton_approx(resistance, R0, 1.0e-6);
 		}
-
-		const size_t index = find_nearest_index(
-		    resistances, num_resistances, r, last_index);
-		last_index = index;
-		rtd_table[i] =
-		    interpolate_temperature(resistances, r, T0, dT, index);
 	}
-
-	free(resistances);
-out:
 	return rtd_table;
 }
 
-int init_rtd_table(const double T0, const double Tmax, const double dT,
-		   const double R0, const double r_ref)
+int rtd_table_init(const double temperature_min, const double temperature_max,
+		   const int R0, const int reference_resistance)
 {
 	assert(RTD_TABLE == NULL);
 
-	RTD_TABLE = generate_rtd_table(T0, Tmax, dT, R0, r_ref);
+	RTD_TABLE = generate_rtd_table(temperature_min, temperature_max, R0,
+				       reference_resistance);
 	if (!RTD_TABLE) {
 		fprintf(stderr, "failed to initialize RTD table\n");
 		return -1;
@@ -199,7 +127,7 @@ int init_rtd_table(const double T0, const double Tmax, const double dT,
 	return 0;
 }
 
-void free_rtd_table()
+void rtd_table_free()
 {
 	free(RTD_TABLE);
 	RTD_TABLE = NULL;

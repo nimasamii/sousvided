@@ -251,7 +251,7 @@ int main(int argc, char **argv)
 	++status;
 
 	printf("Initializing RTD table\n");
-	if (init_rtd_table(0.0, 200.0, 0.1, 1000.0, 3600.0) == -1) {
+	if (rtd_table_init(0.0, 100.0, 1000.0, 3600.0) == -1) {
 		goto out;
 	}
 	++status;
@@ -320,7 +320,7 @@ out:
 		motor_cleanup(&data.motor);
 		max31865_cleanup(&data.maxim);
 	case 2:
-		free_rtd_table();
+		rtd_table_free();
 	case 1:
 		bcm2835_close();
 	}
