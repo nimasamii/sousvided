@@ -40,7 +40,12 @@ static double callendar_van_dusen(const double T)
 		return (((CVD_C * (T - 100.0) * T - CVD_B) * T + CVD_A) * T +
 			1.0);
 	}
+#ifdef FP_FAST_FMA
+	/* Use hardware fused multiply-add if possible */
+	return fma(fma(CVD_B, T, CVD_A), T, 1.0);
+#else
 	return ((CVD_B * T + CVD_A) * T + 1.0);
+#endif /* FP_FAST_FMA */
 }
 
 /* Calculate the derivative of the normalized resistance at temperature T (in
@@ -55,7 +60,12 @@ static double callendar_van_dusen_derivative(const double T)
 		return ((4.0 * T - 300.0) * CVD_C * T - 2.0 * CVD_B) * T +
 		       CVD_A;
 	}
+#ifdef FP_FAST_FMA
+	/* Use hardware fused multiply-add if possible */
+	return fma(2.0 * CVD_B, T, CVD_A);
+#else
 	return CVD_A + (2.0 * CVD_B * T);
+#endif /* FP_FAST_FMA */
 }
 
 /* approximate the temperature for a given resistance using Newton's method */
