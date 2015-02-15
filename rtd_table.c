@@ -29,26 +29,33 @@ static const double CVD_A = 3.9083E-3;
 static const double CVD_B = -5.775E-7;
 static const double CVD_C = -4.18301E-12;
 
-/* Calculate the normalized resistance at temperature T (in degrees celsius)
+/* Calculate the normalized resistance at temperature T (in degrees Celsius)
  * using the Callendar Van Dusen Equation */
 static double callendar_van_dusen(const double T)
 {
-	double resistance = 1.0 + (CVD_A * T) + (CVD_B * pow(T, 2));
+	/* R(T) = 1 + AT + BT^2                 (T >= 0)
+	 *        1 + AT + BT^2 + C(T - 100)T^3	(T < 0)
+	 */
 	if (T < 0.0) {
-		resistance += CVD_C * (T - 100.0) * pow(T, 3);
+		return (((CVD_C * (T - 100.0) * T - CVD_B) * T + CVD_A) * T +
+			1.0);
 	}
-	return resistance;
+	return ((CVD_B * T + CVD_A) * T + 1.0);
 }
 
-/* Calculate the differential of the normalized resistance at temperature T (in
- * degrees celsius), using the Callendar Van Dusen Equation */
+/* Calculate the derivative of the normalized resistance at temperature T (in
+ * degrees Celsius), using the Callendar Van Dusen Equation */
 static double callendar_van_dusen_derivative(const double T)
 {
-	double diff = CVD_A + 2.0 * CVD_B * T;
+	/* dR/dt = A + 2BT                            (T >= 0.0)
+	 *         A + 2BT + C * (-300 T^2 + 4 T ^3)  (T < 0.0)
+	 */
+
 	if (T < 0.0) {
-		diff += CVD_C * (4.0 * pow(T, 3) - 300.0 * pow(T, 2));
+		return ((4.0 * T - 300.0) * CVD_C * T - 2.0 * CVD_B) * T +
+		       CVD_A;
 	}
-	return diff;
+	return CVD_A + (2.0 * CVD_B * T);
 }
 
 /* approximate the temperature for a given resistance using Newton's method */
