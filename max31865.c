@@ -319,17 +319,12 @@ float max31865_get_temperature(max31865_t *m, uint8_t *fault)
 {
 	assert(m != NULL);
 	assert(m->initialized);
-	assert(RTD_TABLE != NULL);
-
-	uint16_t rtd = max31865_read_rtd(m, fault);
-	return RTD_TABLE[rtd];
+	return rtd_table_query(max31865_read_rtd(m, fault));
 }
 
 float max31865_convert_rtd_to_temperature(const uint16_t rtd)
 {
-	assert(RTD_TABLE != NULL);
-	assert((rtd & 0x8000) == 0);
-	return RTD_TABLE[rtd & 0x7FFF];
+	return rtd_table_query(rtd & 0x7FFF);
 }
 
 void max31865_get_fault_thresholds(max31865_t *m, uint16_t *high, uint16_t *low)

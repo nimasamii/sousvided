@@ -20,10 +20,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef SOUSVIDED_RTD_TABLE_H
 #define SOUSVIDED_RTD_TABLE_H
 
-extern float *RTD_TABLE;
-
 int rtd_table_init(const double temperature_min, const double temperature_max,
-		   const int R0, const int reference_resistance);
+		   const unsigned int R0, const unsigned int reference_resistance);
+float rtd_table_query(unsigned int adc);
 void rtd_table_free();
 
 #endif /* SOUSVIDED_RTD_TABLE_H */

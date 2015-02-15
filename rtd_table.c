@@ -22,8 +22,18 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-float *RTD_TABLE = NULL;
+struct rtd_table
+{
+	float *data;
+	unsigned int base;
+	unsigned int size;
+	float min_temp;
+	float max_temp;
+};
+
+struct rtd_table RTD_TABLE = { NULL, 0, 32768, 0.0f, 100.0f };
 
 static const double CVD_A = 3.9083E-3;
 static const double CVD_B = -5.775E-7;
@@ -69,7 +79,8 @@ static double callendar_van_dusen_derivative(const double T)
 }
 
 /* approximate the temperature for a given resistance using Newton's method */
-double newton_approx(const double R, const int R0, const double max_residual)
+double newton_approx(const double R, const unsigned int R0,
+		     const double max_residual)
 {
 	double T = 0.0;
 	double residual;
@@ -80,70 +91,133 @@ double newton_approx(const double R, const int R0, const double max_residual)
 	return T;
 }
 
-static double resistance_from_adc(const int adc, const int reference_resistance)
+static double resistance_from_adc(const unsigned int adc,
+				  const unsigned int reference_resistance)
 {
 	assert(adc < 32768);
 	return ((adc * reference_resistance) / 32768.0);
 }
 
-static float *generate_rtd_table(const double temperature_min,
-				 const double temperature_max, const int R0,
-				 const int reference_resistance)
+static unsigned int find_minimum_adc(const double resistance_min,
+				     const unsigned int reference_resistance)
 {
+	unsigned int adc = 0;
+	while (adc < 32768 && (resistance_from_adc(adc, reference_resistance) <
+			       resistance_min)) {
+		++adc;
+	}
+
+	if (adc > 0) {
+		--adc;
+	}
+
+	return adc;
+}
+
+static unsigned int find_maximum_adc(const double resistance_max,
+				     const unsigned int reference_resistance,
+				     const unsigned int adc_min)
+{
+	unsigned int adc = 32767;
+	while (adc > 0 && (resistance_from_adc(adc, reference_resistance) >
+			   resistance_max)) {
+		--adc;
+	}
+
+	if (!adc) {
+		++adc;
+	}
+
+	if (adc <= adc_min) {
+		adc = adc_min + 1;
+	}
+
+	return adc;
+}
+
+static int generate_rtd_table(struct rtd_table *table,
+			      const double temperature_min,
+			      const double temperature_max,
+			      const unsigned int R0,
+			      const unsigned int reference_resistance)
+{
+	assert(table != NULL);
+
 	if (R0 < 100) {
 		fprintf(stderr, "generate_rtd_table: R0 too small (%d < 100)\n",
 			R0);
-		return NULL;
+		return -1;
 	}
 
 	if (temperature_min >= temperature_max) {
 		fprintf(stderr, "generate_rtd_table: invalid temperature "
 				"boundaries (%f > %f)\n",
 			temperature_min, temperature_max);
-		return NULL;
-	}
-
-	float *rtd_table = (float *)malloc(sizeof(float) * 32768);
-	if (!rtd_table) {
-		fprintf(stderr,
-			"generate_rtd_table: failed to allocate table.\n");
-		return NULL;
+		return -1;
 	}
 
 	const double resistance_min = R0 * callendar_van_dusen(temperature_min);
 	const double resistance_max = R0 * callendar_van_dusen(temperature_max);
 
-	double resistance;
-	int adc;
-	for (adc = 0; adc < 32768; ++adc) {
-		resistance = resistance_from_adc(adc, reference_resistance);
-		if (resistance < resistance_min) {
-			rtd_table[adc] = temperature_min;
-		} else if (resistance > resistance_max) {
-			rtd_table[adc] = temperature_max;
-		} else {
-			rtd_table[adc] = newton_approx(resistance, R0, 1.0e-6);
-		}
+	const unsigned int adc_min =
+	    find_minimum_adc(resistance_min, reference_resistance);
+	const unsigned int adc_max =
+	    find_maximum_adc(resistance_max, reference_resistance, adc_min);
+
+	table->data = malloc(sizeof(float) * (adc_max - adc_min + 1));
+	if (!table->data) {
+		fprintf(stderr,
+			"generate_rtd_table: failed to allocate table.\n");
+		return -1;
 	}
-	return rtd_table;
+	printf("generate_rtd_table: allocated %zu bytes for RTD table\n",
+	       sizeof(float) * (adc_max - adc_min + 1));
+
+	unsigned int adc;
+	for (adc = adc_min; adc < adc_max; ++adc) {
+		double resistance =
+		    resistance_from_adc(adc, reference_resistance);
+		table->data[adc - adc_min] =
+		    newton_approx(resistance, R0, 1.0e-6);
+	}
+
+	table->base = adc_min;
+	table->size = adc_max - adc_min + 1;
+	table->min_temp = temperature_min;
+	table->max_temp = temperature_max;
+
+	return 0;
 }
 
 int rtd_table_init(const double temperature_min, const double temperature_max,
 		   const int R0, const int reference_resistance)
 {
-	assert(RTD_TABLE == NULL);
+	assert(RTD_TABLE.data == NULL);
 
-	RTD_TABLE = generate_rtd_table(temperature_min, temperature_max, R0,
-				       reference_resistance);
-	if (!RTD_TABLE) {
+	struct rtd_table table;
+	if (generate_rtd_table(&table, temperature_min, temperature_max, R0,
+			       reference_resistance) == -1) {
 		fprintf(stderr, "failed to initialize RTD table\n");
 		return -1;
 	}
+	memcpy(&RTD_TABLE, &table, sizeof(table));
 	return 0;
 }
 
 void rtd_table_free()
 {
-	free(RTD_TABLE);
-	RTD_TABLE = NULL;
+	free(RTD_TABLE.data);
+}
+
+float rtd_table_query(const unsigned int adc)
+{
+	assert(adc < 32768);
+	assert(RTD_TABLE.data != NULL);
+
+	if (adc < RTD_TABLE.base) {
+		return RTD_TABLE.min_temp;
+	} else if ((adc - RTD_TABLE.base) >= RTD_TABLE.size) {
+		return RTD_TABLE.max_temp;
+	}
+	return RTD_TABLE.data[adc - RTD_TABLE.base];
 }
