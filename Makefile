@@ -1,13 +1,15 @@
 BUILD_ARCH := $(shell uname -m)
 
-CFLAGS = -g -Wall -Werror -I/home/nima/src/bcm2835-1.38/src -pthread
-LDFLAGS = -L/home/nima/src/bcm2835-1.38/src
+CFLAGS = -g -Wall -Werror -I../bcm2835-1.38/src -pthread
+LDFLAGS = -L../bcm2835-1.38/src
 LDLIBS = -lbcm2835 -lm -lrt -lpthread
 
 # Add CFLAGS to optimize build when compiling on RaspberryPi
 ifeq ($(BUILD_ARCH),armv6l)
 	CFLAGS += -O2 -march=armv6zk -mcpu=arm1176jzf-s -mtune=arm1176jzf-s
 	CFLAGS += -mfpu=vfp -mfloat-abi=hard
+else
+	CFLAGS += -O2
 endif
 
 .PHONY: all clean
