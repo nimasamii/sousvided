@@ -26,7 +26,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 float *RTD_TABLE = NULL;
 
 static const double CVD_A = 3.9083E-3;
-static const double CVD_B = -5.775 - 7;
+static const double CVD_B = -5.775E-7;
 static const double CVD_C = -4.18301E-12;
 
 /* Calculate the normalized resistance at temperature T (in degrees celsius)
@@ -93,10 +93,8 @@ static float *generate_rtd_table(const double temperature_min,
 		return NULL;
 	}
 
-	const double resistance_min =
-	    newton_approx(callendar_van_dusen(temperature_min), R0, 1.0e-6);
-	const double resistance_max =
-	    newton_approx(callendar_van_dusen(temperature_max), R0, 1.0e-6);
+	const double resistance_min = R0 * callendar_van_dusen(temperature_min);
+	const double resistance_max = R0 * callendar_van_dusen(temperature_max);
 
 	double resistance;
 	int adc;
