@@ -256,13 +256,22 @@ int main(int argc, char **argv)
 	}
 	++status;
 
-	max31865_init(&data.maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
-		      MAX31865_4WIRE_RTD);
+	if (max31865_init(&data.maxim, BCM2835_SPI_CS0, MAX31865_DRDY_PIN,
+		      MAX31865_4WIRE_RTD) == -1) {
+		if (errno == EIO) {
+			fprintf(stderr, "Failed to initialize MAX31865: failed "
+					"to set config register\n");
+		} else {
+			fprintf(stderr, "Failed to initialize MAX31865\n");
+		}
+		goto out;
+	}
+
+	++status;
 
 	motor_init(&data.motor, MOTOR_CLOCK_DIVIDER, MOTOR_PWM_RANGE);
 	motor_start(&data.motor);
 	motor_set_duty_cycle(&data.motor, MOTOR_PWM_RANGE / 2);
-
 	++status;
 
 	data.pidctrl = pidctrl_init(
@@ -305,19 +314,20 @@ int main(int argc, char **argv)
 
 out:
 	switch (status) {
-	case 7:
+	case 8:
 		data.stop_control_loop = 1;
 		pthread_join(data.ctrl_loop_id, NULL);
-	case 6:
+	case 7:
 		data.stop_control_loop = 1;
 		pthread_join(data.heater_ctrl_id, NULL);
-	case 5:
+	case 6:
 		cleanup_SSR_output();
 		buttons_cleanup(data.buttons);
-	case 4:
+	case 5:
 		pidctrl_free(data.pidctrl);
-	case 3:
+	case 4:
 		motor_cleanup(&data.motor);
+	case 3:
 		max31865_cleanup(&data.maxim);
 	case 2:
 		rtd_table_free();

@@ -128,7 +128,7 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 	bcm2835_spi_begin();
 
 	/* set SPI bit order to most significant bit first.
-	 * NOTE: This is the only modethe BCM2835 chip supports, fortunately so
+	 * NOTE: This is the only mode the BCM2835 chip supports, fortunately so
 	 *       does the MAX31865.
 	 */
 	bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
@@ -136,24 +136,23 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 	/* set SPI to operate in mode 1 (clock polarity = 0, clock phase = 1) */
 	bcm2835_spi_setDataMode(BCM2835_SPI_MODE1);
 
-	/* set SPI clock frequency to 5 MHz (base clock is 250 MHz by default)
-	 */
+	/* set SPI clock frequency to 5 MHz (base clock is 250 MHz) */
 	bcm2835_spi_setClockDivider(50);
 
-	/* set SPI CE polarity to be active low */
-	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+	/* set SPI CS0 polarity to be active low (the default) */
+	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
 
-	/* set SPI chip select pin (CE0|CE1) to be asserted on data transfer */
+	/* set SPI chip select pin to be asserted on data transfer */
 	bcm2835_spi_chipSelect(cs_pin);
 
 	/* configure input detection on DRDY pin:
 	 *   - set drdy_pin as input
-	 *   - enable pull up resistor
-	 *   - enable low detect enable
+	 *   - disable pull up/down resistors
+	 *   - enable falling edge detect enable
 	 */
-	bcm2835_gpio_fsel(drdy_pin, BCM2835_GPIO_FSEL_INPT);
-	bcm2835_gpio_set_pud(drdy_pin, BCM2835_GPIO_PUD_UP);
-	bcm2835_gpio_len(drdy_pin);
+	bcm2835_gpio_fsel(m->drdy_pin, BCM2835_GPIO_FSEL_INPT);
+	bcm2835_gpio_set_pud(m->drdy_pin, BCM2835_GPIO_PUD_OFF);
+	bcm2835_gpio_fen(m->drdy_pin);
 
 	m->initialized = 1;
 
@@ -161,10 +160,9 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 	max31865_get_fault_thresholds(m, NULL, NULL);
 
 	int rc = max31865_set_configuration(
-	    m, MAX31865_VBIAS_ON, MAX31865_CONVMODE_AUTO, MAX31865_ONE_SHOT_OFF,
-	    rtd_type, 0, MAX31865_FAULT_STATUS_AUTO_CLEAR,
-	    MAX31865_50HZ_FILTER);
-	assert(rc == 0);
+	    m, MAX31865_VBIAS_ON, MAX31865_CONV_MODE_AUTO,
+	    MAX31865_ONE_SHOT_OFF, rtd_type, 0,
+	    MAX31865_FAULT_STATUS_AUTO_CLEAR, MAX31865_NOISE_FILTER_50HZ);
 	return rc;
 }
 
@@ -174,10 +172,10 @@ void max31865_cleanup(max31865_t *m)
 	assert(m->initialized);
 
 	/* turn off automatic conversion */
-	max31865_set_configuration(m, MAX31865_VBIAS_OFF, MAX31865_CONVMODE_OFF,
-				   MAX31865_ONE_SHOT_OFF, m->rtd_type, 0,
-				   MAX31865_FAULT_STATUS_AUTO_CLEAR,
-				   MAX31865_50HZ_FILTER);
+	max31865_set_configuration(
+	    m, MAX31865_VBIAS_OFF, MAX31865_CONV_MODE_NORMALLY_OFF,
+	    MAX31865_ONE_SHOT_OFF, m->rtd_type, 0,
+	    MAX31865_FAULT_STATUS_AUTO_CLEAR, MAX31865_NOISE_FILTER_50HZ);
 
 	/* disable low detect enable */
 	bcm2835_gpio_clr_len(m->drdy_pin);
@@ -211,12 +209,12 @@ uint8_t max31865_read_configuration(max31865_t *m)
 	return config;
 }
 
-int max31865_set_configuration(max31865_t *m, const int vbias,
-			       const int conv_mode, const int one_shot,
-			       const int rtd_type,
+int max31865_set_configuration(max31865_t *m, enum MAX31865_VBIAS vbias,
+			       enum MAX31865_CONVERSION_MODE conv_mode,
+			       int one_shot, enum MAX31865_RTD_TYPE rtd_type,
 			       const int fault_detection_ctrl,
 			       const int fault_status_clear,
-			       const int noise_filter_frequency)
+			       enum MAX31865_NOISE_FILTER_HZ noise_filter_hz)
 {
 	assert(m != NULL);
 	assert(m->initialized);
@@ -227,7 +225,7 @@ int max31865_set_configuration(max31865_t *m, const int vbias,
 	 *        Mode        RTD    CycleH CycleL Status Filter
 	 * 0x80   0x40 0x20   0x10   0x08   0x04   0x02   0x01
 	 */
-	uint8_t config = noise_filter_frequency & 0x01;
+	uint8_t config = noise_filter_hz;
 	if (fault_status_clear == MAX31865_FAULT_STATUS_AUTO_CLEAR) {
 		config |= 0x02;
 	}
@@ -241,7 +239,7 @@ int max31865_set_configuration(max31865_t *m, const int vbias,
 	}
 
 	if (one_shot) {
-		if (conv_mode != MAX31865_CONVMODE_OFF) {
+		if (conv_mode != MAX31865_CONV_MODE_NORMALLY_OFF) {
 			errno = EINVAL;
 			return -1;
 		}
@@ -262,9 +260,18 @@ int max31865_set_configuration(max31865_t *m, const int vbias,
 
 	write_register8(m, MAX31865_REGISTER_CONFIG, config);
 
-	/* Don't save fault status auto-clear bit as the MAX31865 sets it to 0
-	 * after clearing the fault status register */
-	m->config = config & ~(0x02);
+	/* Don't save fault status auto-clear and fault detection cycle control
+	 * bits, as the MAX31865 resets them to 0 after a fault detection cylce
+	 * or after clearing the fault status register */
+	m->config = config & ~(0x0E);
+
+	/* read the config register back to see if the chip accepted our
+	 * desired settings */
+	config = read_register8(m, MAX31865_REGISTER_CONFIG);
+	if (m->config != config) {
+		errno = EIO;
+		return -1;
+	}
 
 	return 0;
 }
