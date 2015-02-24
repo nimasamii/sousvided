@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
+#include <stdio.h>
+
+#include <pthread.h>
 
 #include "bcm2835.h"
 #include "rtd_table.h"
@@ -32,11 +35,9 @@ static uint8_t read_register8(const max31865_t *m,
 	assert(m != NULL);
 	assert(reg != MAX31865_REGISTER_MAX);
 
-	uint16_t data = ((uint16_t)reg << 8) & 0x7F00;
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
-	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
-	return (uint8_t)(data & 0x00FF);
+	uint8_t data[2] = { reg & 0x7F, 0x00 };
+	bcm2835_spi_transfern((char *)data, sizeof(data));
+	return data[1];
 }
 
 static uint16_t read_register16(const max31865_t *m,
@@ -45,11 +46,9 @@ static uint16_t read_register16(const max31865_t *m,
 	assert(m != NULL);
 	assert(reg != MAX31865_REGISTER_MAX);
 
-	uint8_t data[3] = { reg & 0x7F, 0, 0 };
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
+	uint8_t data[3] = { reg & 0x7F, 0x00, 0x00 };
 	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
-	return (uint16_t)data[1] << 8 | (uint16_t)data[2];
+	return (((uint16_t)data[1] << 8) | (uint16_t)data[2]);
 }
 
 static uint32_t read_register32(const max31865_t *m,
@@ -59,11 +58,9 @@ static uint32_t read_register32(const max31865_t *m,
 	assert(reg != MAX31865_REGISTER_MAX);
 
 	uint8_t data[5] = { reg & 0x7F, 0, 0, 0, 0 };
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
 	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
-	return ((uint32_t)data[1] << 24 | (uint32_t)data[2] << 16 |
-		(uint32_t)data[3] << 8 | (uint32_t)data[4]);
+	return (((uint32_t)data[1] << 24) | ((uint32_t)data[2] << 16) |
+		((uint32_t)data[3] << 8) | (uint32_t)data[4]);
 }
 
 static void write_register8(const max31865_t *m,
@@ -73,11 +70,8 @@ static void write_register8(const max31865_t *m,
 	assert(m != NULL);
 	assert(reg != MAX31865_REGISTER_MAX);
 
-	uint16_t data = (((uint16_t)reg << 8) & 0xFF00) | 0x8000 |
-			((uint16_t)value & 0x00FF);
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
-	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
+	uint8_t data[2] = { 0x80 | reg, value };
+	bcm2835_spi_transfern((char *)data, sizeof(data));
 }
 
 static void write_register16(const max31865_t *m,
@@ -87,11 +81,8 @@ static void write_register16(const max31865_t *m,
 	assert(m != NULL);
 	assert(reg != MAX31865_REGISTER_MAX);
 
-	uint8_t data[3] = {(uint8_t)reg | 0x8000, (value & 0xFF00) >> 8,
-			   value & 0x00FF };
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
+	uint8_t data[3] = { 0x80 | reg, (value & 0xFF00) >> 8, value & 0xFF };
 	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
 }
 
 static void write_register32(const max31865_t *m,
@@ -101,14 +92,10 @@ static void write_register32(const max31865_t *m,
 	assert(m != NULL);
 	assert(reg != MAX31865_REGISTER_MAX);
 
-	uint8_t data[5] = {(uint8_t)reg | 0x8000,
-			   (value & 0xFF000000) >> 24,
-			   (value & 0x00FF0000) >> 16,
-			   (value & 0x0000FF00) >> 8,
-			   value & 0x000000FF };
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
+	uint8_t data[5] = {
+	    0x80 | reg, (value & 0xFF000000) >> 24, (value & 0x00FF0000) >> 16, 
+	    (value & 0x0000FF00) >> 8, (value & 0x000000FF) };
 	bcm2835_spi_transfern((char *)&data, sizeof(data));
-	bcm2835_spi_setChipSelectPolarity(m->cs_pin, HIGH);
 }
 
 int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
@@ -121,6 +108,7 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 	m->cs_pin = cs_pin;
 	m->drdy_pin = drdy_pin;
 	m->rtd_type = rtd_type;
+	m->query_mode = 0;
 	m->last_query.tv_sec = 0;
 	m->last_query.tv_nsec = 0;
 
@@ -138,31 +126,32 @@ int max31865_init(max31865_t *m, const uint8_t cs_pin, const uint8_t drdy_pin,
 
 	/* set SPI clock frequency to 5 MHz (base clock is 250 MHz) */
 	bcm2835_spi_setClockDivider(50);
+	
+	/* set SPI chip select pin to be asserted on data transfer */
+	bcm2835_spi_chipSelect(cs_pin);
 
 	/* set SPI CS0 polarity to be active low (the default) */
 	bcm2835_spi_setChipSelectPolarity(m->cs_pin, LOW);
 
-	/* set SPI chip select pin to be asserted on data transfer */
-	bcm2835_spi_chipSelect(cs_pin);
-
 	/* configure input detection on DRDY pin:
 	 *   - set drdy_pin as input
 	 *   - disable pull up/down resistors
-	 *   - enable falling edge detect enable
+	 *   - enable low detect on DRDY pin
 	 */
 	bcm2835_gpio_fsel(m->drdy_pin, BCM2835_GPIO_FSEL_INPT);
 	bcm2835_gpio_set_pud(m->drdy_pin, BCM2835_GPIO_PUD_OFF);
-	bcm2835_gpio_fen(m->drdy_pin);
+	bcm2835_gpio_len(m->drdy_pin);
 
 	m->initialized = 1;
-
-	/* read initial fault thresholds */
-	max31865_get_fault_thresholds(m, NULL, NULL);
 
 	int rc = max31865_set_configuration(
 	    m, MAX31865_VBIAS_ON, MAX31865_CONV_MODE_AUTO,
 	    MAX31865_ONE_SHOT_OFF, rtd_type, 0,
 	    MAX31865_FAULT_STATUS_AUTO_CLEAR, MAX31865_NOISE_FILTER_50HZ);
+	
+	/* read initial fault thresholds */
+	max31865_get_fault_thresholds(m, NULL, NULL);
+
 	return rc;
 }
 
@@ -268,7 +257,10 @@ int max31865_set_configuration(max31865_t *m, enum MAX31865_VBIAS vbias,
 	/* read the config register back to see if the chip accepted our
 	 * desired settings */
 	config = read_register8(m, MAX31865_REGISTER_CONFIG);
-	if (m->config != config) {
+	if (m->config != (config & (~0x0E))) {
+		write_register8(m, MAX31865_REGISTER_CONFIG, 0);
+		fprintf(stderr, "Couldn't read back config (0x%02X != 0x%02X)\n",
+			(int)config, (int)m->config);
 		errno = EIO;
 		return -1;
 	}
@@ -285,39 +277,45 @@ static uint32_t delta_t_ms(const struct timespec *start, const struct timespec *
 		(end->tv_nsec - start->tv_nsec) * 1000000);
 }
 
+pthread_mutex_t rtd_mtx = PTHREAD_MUTEX_INITIALIZER;
+
 uint16_t max31865_read_rtd(max31865_t *m, uint8_t *fault)
 {
 	assert(m != NULL);
 	assert(m->initialized);
 
-	/* check if DRDY signaled new temperature readout
-	 * falling edge detect is currently not working
-	if (bcm2835_gpio_eds(m->drdy_pin)) {
-		m->rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
-		if (fault) {
-			*fault = m->rtd & 0x0001;
-		}
-		m->rtd >>= 1;
+	pthread_mutex_lock(&rtd_mtx);
 
-		bcm2835_gpio_set_eds(m->drdy_pin);
-	}*/
-
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	if (delta_t_ms(&m->last_query, &now) >= 15) {
-		/* The MAX31865 takes about 15ms per conversion,
-		 * so we need to only query the chip if a new
-		 * measurement is available
-		 */
-		uint16_t rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
-		if (fault) {
-			*fault = rtd & 0x0001;
+	/* check if DRDY signaled new temperature readout */
+	if (!m->query_mode) {
+		if (bcm2835_gpio_eds(m->drdy_pin)) {
+			m->rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
+			if (fault) {
+				*fault = m->rtd & 0x0001;
+			}
+			m->rtd >>= 1;
+			bcm2835_gpio_set_eds(m->drdy_pin);
 		}
-		m->rtd = (rtd >> 1) & 0x7FFF;
-		m->last_query = now;
-	} else if (fault) {
-		*fault = 0;
+	} else {
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (delta_t_ms(&m->last_query, &now) >= 50) {
+			/* The MAX31865 takes about 20ms per conversion,
+			 * so we need to only query the chip if a new
+			 * measurement is available
+			 */
+			uint16_t rtd = read_register16(m, MAX31865_REGISTER_RTD_MSB);
+			if (fault) {
+				*fault = rtd & 0x0001;
+			}
+			m->rtd = (rtd >> 1) & 0x7FFF;
+			m->last_query = now;
+		} else if (fault) {
+			*fault = 0;
+		}
 	}
+
+	pthread_mutex_unlock(&rtd_mtx);
 
 	return m->rtd;
 }

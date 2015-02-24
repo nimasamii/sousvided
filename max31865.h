@@ -65,13 +65,14 @@ enum MAX31865_NOISE_FILTER_HZ {
 struct max31865
 {
 	uint8_t initialized;
+	uint8_t query_mode;
+	uint8_t rtd_type;
 	uint8_t config;
 	uint8_t cs_pin;
 	uint8_t drdy_pin;
 	uint16_t rtd;
 	uint16_t fault_ht;
 	uint16_t fault_lt;
-	uint8_t rtd_type;
 	struct timespec last_query;
 };
 typedef struct max31865 max31865_t;
