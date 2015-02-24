@@ -29,7 +29,6 @@ struct motor {
 	uint32_t pwm_clock_divider;
 	uint32_t duty_cycle;
 	uint32_t duty_cycle_range;
-	uint8_t duty_cycle_changed;
 	uint8_t status;
 	uint8_t initialized;
 };

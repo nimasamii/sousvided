@@ -45,17 +45,23 @@ void motor_init(motor_t *m, const uint32_t pwm_clock_divider,
 	bcm2835_gpio_fsel(MOTOR_PWM_PIN, BCM2835_GPIO_FSEL_ALT5);
 
 	/* set PWM clock divider to select PWM frequency (base clock is
-	 * 19.2 Mhz) */
+	 * 19.2 MHz) */
 	bcm2835_pwm_set_clock(m->pwm_clock_divider);
 
 	/* set MARKSPACE mode and provide no PWM output */
-	bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE, 0);
+	bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
+				m->status);
+	bcm2835_delay(10);
 
 	/* set duty cycle range */
-	bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, duty_cycle_range);
+	bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
 
 	/* PWM is off, but still set the current duty cycle to zero */
-	bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, 0);
+	bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+
+	m->initialized = 1;
+
+	bcm2835_delay(10);
 }
 
 void motor_cleanup(motor_t *m)
@@ -105,16 +111,16 @@ void motor_set_duty_cycle_range(motor_t *m, const uint32_t duty_cycle_range)
 	m->duty_cycle = percentage * duty_cycle_range;
 	m->duty_cycle_range = duty_cycle_range;
 
-	if (m->status == MOTOR_STATUS_OFF) {
-		m->duty_cycle_changed = 1;
-	} else if (m->duty_cycle > duty_cycle_range) {
-		/* update duty cycle first, then set new range */
-		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
-		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
-	} else {
-		/* set new range first, then update duty cycle */
-		bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
-		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+	if (m->status == MOTOR_STATUS_ON) {
+		if (m->duty_cycle > duty_cycle_range) {
+			/* update duty cycle first, then set new range */
+			bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+			bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
+		} else {
+			/* set new range first, then update duty cycle */
+			bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL, m->duty_cycle_range);
+			bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+		}
 	}
 }
 
@@ -155,17 +161,11 @@ void motor_start(motor_t *m)
 	assert(m != NULL);
 	assert(m->initialized);
 
-	if (m->status != MOTOR_STATUS_ON) {
-		bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
-				     MOTOR_STATUS_ON);
+	if (m->status == MOTOR_STATUS_OFF) {
 		m->status = MOTOR_STATUS_ON;
-
-		if (m->duty_cycle_changed) {
-			bcm2835_pwm_set_range(MOTOR_PWM_CHANNEL,
-					      m->duty_cycle_range);
-			m->duty_cycle_changed = 0;
-		}
-		bcm2835_pwm_set_data(MOTOR_PWM_CHANNEL, m->duty_cycle);
+		bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
+					m->status);
+		bcm2835_delay(10);
 	}
 }
 
@@ -174,9 +174,10 @@ void motor_stop(motor_t *m)
 	assert(m != NULL);
 	assert(m->initialized);
 
-	if (m->status != MOTOR_STATUS_OFF) {
-		bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
-				     MOTOR_STATUS_OFF);
+	if (m->status == MOTOR_STATUS_ON) {
 		m->status = MOTOR_STATUS_OFF;
+		bcm2835_pwm_set_mode(MOTOR_PWM_CHANNEL, MOTOR_MARKSPACE_MODE,
+				     m->status);
+		bcm2835_delay(10);
 	}
 }
