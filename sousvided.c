@@ -254,7 +254,7 @@ int main(int argc, char **argv)
 	++status;
 
 	printf("Initializing RTD table\n");
-	if (rtd_table_init(0.0, 100.0, 1000.0, 3600.0) == -1) {
+	if (rtd_table_init(0.0, 100.0, 1000.0, 1400.0) == -1) {
 		goto out;
 	}
 	++status;
@@ -316,6 +316,33 @@ int main(int argc, char **argv)
 		goto out;
 	}
 	++status;
+
+	int done = 0;
+        while(!done) {
+                switch (getchar()) {
+                case '+':
+                        button_callback_handler(BUTTON_1_PIN, &data);
+                        break;
+                case '.':
+                        update_target_temperature(data.pidctrl, 0.1);
+                        break;
+                case ',':
+                        update_target_temperature(data.pidctrl, -0.1);
+                        break;
+                case '-':
+                        button_callback_handler(BUTTON_2_PIN, &data);
+                        break;
+                case 'm':
+                        button_callback_handler(BUTTON_3_PIN, &data);
+                        break;
+                case 'n':
+                        button_callback_handler(BUTTON_4_PIN, &data);
+                        break;
+                case 'q':
+                        done = 1;
+                        break;
+                }
+        }
 
 out:
 	switch (status) {
