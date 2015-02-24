@@ -40,13 +40,16 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define MOTOR_PWM_RANGE 1000
 #define MOTOR_SPEED_DELTA 50
 
-#define PID_MIN_DUTY_CYCLE 0.02
-#define PID_MAX_DUTY_CYCLE 1.0
+#define PID_MIN_DUTY_CYCLE 0.0
+#define PID_MAX_DUTY_CYCLE 1000.0
 #define PID_MIN_SET_POINT 20.0
 #define PID_MAX_SET_POINT 95.0
 #define PID_SET_POINT_DELTA 0.5
-#define PID_CONTROL_LOOP_HZ 5
+#define PID_CONTROL_LOOP_HZ 1
 #define PID_CONTROL_LOOP_MS (1000 / PID_CONTROL_LOOP_HZ)
+#define PID_PROPORTIONAL_GAIN 500.0
+#define PID_INTEGRAL_GAIN 2.5
+#define PID_DIFFERENTIAL_GAIN 50.0
 
 #define BUTTON_1_PIN RPI_V2_GPIO_P1_13
 #define BUTTON_2_PIN RPI_V2_GPIO_P1_15
@@ -89,7 +92,7 @@ static void change_motor_speed(motor_t *motor, int32_t delta)
 	}
 	motor_set_duty_cycle(motor, duty_cycle);
 	printf("New motor speed is %f%%\n",
-	       motor_get_duty_cycle_percentage(motor));
+	       100.0 * motor_get_duty_cycle_percentage(motor));
 }
 
 static void update_target_temperature(pidctrl_t *pidctrl, double delta)
@@ -103,7 +106,7 @@ static void update_target_temperature(pidctrl_t *pidctrl, double delta)
 		current += delta;
 	}
 	pidctrl_set_set_point(pidctrl, current);
-	printf("New target temperature %f degree Celsius\n", current);
+	printf("New target temperature %.2f degree Celsius\n", current);
 }
 
 static void button_callback_handler(const uint8_t pin, void *user_data)
@@ -166,7 +169,7 @@ static void *heater_control_thread(void *user_data)
 		 */
 		if (data->heater_duty_cycle >= (10.0 / PID_CONTROL_LOOP_MS)) {
 			on_ms = nearest_multiple(
-			    PID_CONTROL_LOOP_MS * data->heater_duty_cycle, 10);
+			    PID_CONTROL_LOOP_MS * data->heater_duty_cycle / 1000.0, 10);
 			if (on_ms > PID_CONTROL_LOOP_MS) {
 				on_ms = PID_CONTROL_LOOP_MS;
 			}
@@ -208,7 +211,7 @@ static void *heater_control_thread(void *user_data)
 		}
 
 		if (++n % PID_CONTROL_LOOP_HZ == 0) {
-			printf("Heater was on for %u ms (%f %%), T = %f \xB0""C\n",
+			printf("Heater was on for %u ms (%.2f %%), T = %.2f \xB0""C\n",
 			       total_on, (total_on / 10.0),
 			       max31865_get_temperature(&data->maxim, NULL));
 			total_on = 0;
@@ -275,8 +278,10 @@ int main(int argc, char **argv)
 	++status;
 
 	data.pidctrl = pidctrl_init(
-	    40.0, 0.5, 25.0, 4.0, &query_wrapper, (void *)&data.maxim,
-	    PID_CONTROL_LOOP_MS, PID_MIN_DUTY_CYCLE, PID_MAX_DUTY_CYCLE);
+	    nearest_multiple(max31865_get_temperature(&data.maxim, NULL), 1.0),
+	    PID_PROPORTIONAL_GAIN, PID_INTEGRAL_GAIN, PID_DIFFERENTIAL_GAIN, 2.0,
+	    &query_wrapper, (void *)&data.maxim, PID_CONTROL_LOOP_MS,
+	    PID_MIN_DUTY_CYCLE, PID_MAX_DUTY_CYCLE);
 	if (!data.pidctrl) {
 		fprintf(stderr, "Failed to initialize PID controller.\n");
 		goto out;

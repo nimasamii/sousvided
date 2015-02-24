@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static double clamp(const double v, const double min, const double max)
 {
@@ -34,7 +35,7 @@ static double clamp(const double v, const double min, const double max)
 		 * ~16ms @ 60Hz mains frequency) and not be a lower limit
 		 * but the minimal on-time threshold
 		 */
-		return 0.0;
+		return min;
 	} else if (v > max) {
 		return max;
 	}
@@ -56,19 +57,32 @@ static void update_output(pidctrl_t *p)
 {
 	const double input = p->query_fn(p->user_data);
 	const double error = p->set_point - input;
+
+	/* Don't to PID control when target temperature is off by more than the
+	   error limit to avoid overshoot through integral windup */
+	if (error > p->error_limit) {
+		p->integral = 0.0;
+		p->last_input = 0.0;
+		p->output = p->output_max;
+		return;
+	}
+
 	const double delta_input = input - p->last_input;
 
 	p->integral =
 	    clamp(p->integral + (p->ki * error), p->output_min, p->output_max);
 	p->last_input = input;
-	p->output = clamp(p->kp * error + p->integral - (p->ki * delta_input),
+	p->output = clamp(p->kp * error + p->integral - (p->kd * delta_input),
 			  p->output_min, p->output_max);
+	fprintf(stderr, "PID: IN=%f, OUT=%f, ERR=%f, INT=%f, DERIV=%f\n",
+                input, p->output, error, p->integral, delta_input);
 }
 
 pidctrl_t *pidctrl_init(const double sp, const double kp, const double ki,
-			const double kd, pidctrl_query_fn query_fn,
-			void *user_data, const uint32_t delta_t_ms,
-			const double output_min, const double output_max)
+			const double kd, const double error_limit,
+			pidctrl_query_fn query_fn, void *user_data,
+			const uint32_t delta_t_ms, const double output_min,
+			const double output_max)
 {
 	assert(query_fn != NULL);
 	assert(delta_t_ms > 0);
@@ -81,6 +95,7 @@ pidctrl_t *pidctrl_init(const double sp, const double kp, const double ki,
 		p->ki = ki * (delta_t_ms * 0.001);
 		p->kd = kd / (delta_t_ms * 0.001);
 
+		p->error_limit = error_limit;
 		p->integral = 0.0;
 		p->output = 0.0;
 		p->output_min = output_min;

@@ -33,6 +33,7 @@ struct pidctrl
 	double ki;
 	double kd;
 
+	double error_limit;
 	double integral;
 	double last_input;
 	double output;
@@ -49,9 +50,10 @@ struct pidctrl
 typedef struct pidctrl pidctrl_t;
 
 pidctrl_t *pidctrl_init(const double sp, const double kp, const double ki,
-			const double kd, pidctrl_query_fn query_fn,
-			void *user_data, const uint32_t delta_t_ms,
-			const double output_min, const double output_max);
+			const double kd, const double error_limit,
+			pidctrl_query_fn query_fn, void *user_data,
+			const uint32_t delta_t_ms, const double output_min,
+			const double output_max);
 void pidctrl_free(pidctrl_t *p);
 
 void pidctrl_set_delta_t(pidctrl_t *p, const uint32_t delta_t_ms);
@@ -64,6 +66,9 @@ void pidctrl_tune(pidctrl_t *p, const double kp, const double ki,
 
 void pidctrl_set_limits(pidctrl_t *p, const double min, const double max);
 void pidctrl_get_limits(const pidctrl_t *p, double *min, double *max);
+
+void pidctrl_set_error_limit(pidctrl_t *p, const double error_limit);
+double pidctrl_get_error_limit(pidctrl_t *p);
 
 void pidctrl_set_query_callback(pidctrl_t *p, pidctrl_query_fn query_fn,
 				void *user_data);
